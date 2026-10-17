@@ -1,0 +1,24 @@
+# Optional: a local PostgreSQL for development and tests.
+# Run:  docker compose up -d
+# Host port 5433 is used so it does not clash with a PostgreSQL that may already run on 5432.
+services:
+  postgres:
+    image: postgres:17
+    container_name: task-boards-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: task_boards
+    ports:
+      - "5433:5432"
+    volumes:
+      - task-boards-pgdata:/var/lib/postgresql/data
+      - ./scripts/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  task-boards-pgdata:

@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+src/generated/
+
+# secrets
+.env
+.env.*
+!.env.example
+
+# logs / OS / editors
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -1,0 +1,4799 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Task Boards API",
+    "version": "1.0.0",
+    "description": "REST API for personal and shared task & reminder boards.\n\n**How to try it here:**\n1. `POST /api/auth/login` → \"Try it out\" → Execute (demo user: `dana@example.com` / `Demo1234!` after running the seed).\n2. Copy `data.accessToken` from the response.\n3. Click **Authorize** (top right), paste the token, click Authorize.\n4. Call any protected endpoint.\n\nAll responses use `{ \"success\": true, \"data\": ... }` or `{ \"success\": false, \"error\": { \"code\", \"message\" } }`.\nAll ids are UUID strings. All date-times are ISO 8601 in UTC (e.g. `2026-11-02T09:00:00.000Z`). Date-only values use `YYYY-MM-DD`.\n\n**Board permissions:** PRIVATE board — only the owner. SHARED board — owner and members can view; members can edit tasks/reminders only when the board is open (`isOpen: true`); only the owner manages settings, share link and members.\nA board you are not allowed to view returns **404**. A board you can view but not edit returns **403** on writes."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "This server"
+    }
+  ],
+  "tags": [
+    {
+      "name": "System",
+      "description": "Health check"
+    },
+    {
+      "name": "Auth",
+      "description": "Register, login, logout, current user"
+    },
+    {
+      "name": "Boards",
+      "description": "Boards, share links"
+    },
+    {
+      "name": "Members",
+      "description": "Members of SHARED boards"
+    },
+    {
+      "name": "Tasks",
+      "description": "Tasks (unscheduled, date-only or timed)"
+    },
+    {
+      "name": "Reminders",
+      "description": "Reminders (never block time)"
+    },
+    {
+      "name": "Calendar",
+      "description": "Calendar view and scheduling suggestions"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Paste the accessToken returned by /api/auth/login or /api/auth/register"
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "error"
+        ],
+        "properties": {
+          "success": {
+            "const": false
+          },
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "VALIDATION_ERROR",
+                  "INVALID_JSON",
+                  "UNAUTHORIZED",
+                  "INVALID_TOKEN",
+                  "INVALID_CREDENTIALS",
+                  "FORBIDDEN",
+                  "NOT_FOUND",
+                  "BOARD_NOT_FOUND",
+                  "TASK_NOT_FOUND",
+                  "REMINDER_NOT_FOUND",
+                  "USER_NOT_FOUND",
+                  "MEMBER_NOT_FOUND",
+                  "EMAIL_TAKEN",
+                  "ALREADY_MEMBER",
+                  "BOARD_IS_PRIVATE",
+                  "BOARD_HAS_MEMBERS",
+                  "CANNOT_ADD_OWNER",
+                  "CANNOT_REMOVE_OWNER",
+                  "NOT_A_BOARD_MEMBER",
+                  "TIME_CONFLICT",
+                  "RATE_LIMITED",
+                  "DATABASE_UNAVAILABLE",
+                  "INTERNAL_ERROR"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "details": {
+                "description": "Optional extra information (validation issues, conflicting times, ...)"
+              }
+            }
+          }
+        }
+      },
+      "Pagination": {
+        "type": "object",
+        "required": [
+          "page",
+          "pageSize",
+          "total",
+          "totalPages"
+        ],
+        "properties": {
+          "page": {
+            "type": "integer"
+          },
+          "pageSize": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "totalPages": {
+            "type": "integer"
+          }
+        }
+      },
+      "User": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "name",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "name": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "UserSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "email"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          }
+        }
+      },
+      "AuthResult": {
+        "type": "object",
+        "required": [
+          "user",
+          "accessToken",
+          "tokenType",
+          "expiresAt"
+        ],
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/User"
+          },
+          "accessToken": {
+            "type": "string",
+            "description": "JWT — send as \"Authorization: Bearer <token>\""
+          },
+          "tokenType": {
+            "const": "Bearer"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "BoardAccess": {
+        "type": "object",
+        "description": "The current user's permissions on the board — use it to show/hide buttons in the UI",
+        "required": [
+          "isOwner",
+          "isMember",
+          "canView",
+          "canEdit",
+          "canManage"
+        ],
+        "properties": {
+          "isOwner": {
+            "type": "boolean"
+          },
+          "isMember": {
+            "type": "boolean"
+          },
+          "canView": {
+            "type": "boolean"
+          },
+          "canEdit": {
+            "type": "boolean",
+            "description": "May create/edit/delete tasks and reminders"
+          },
+          "canManage": {
+            "type": "boolean",
+            "description": "May change settings, share link and members (owner only)"
+          }
+        }
+      },
+      "Board": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "visibility",
+          "isOpen",
+          "owner",
+          "memberCount",
+          "shareToken",
+          "myAccess",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "PRIVATE",
+              "SHARED"
+            ]
+          },
+          "isOpen": {
+            "type": "boolean",
+            "description": "SHARED boards: members may edit. Always false for PRIVATE."
+          },
+          "owner": {
+            "$ref": "#/components/schemas/UserSummary"
+          },
+          "memberCount": {
+            "type": "integer",
+            "description": "Members not counting the owner"
+          },
+          "shareToken": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Only returned to the owner of a SHARED board"
+          },
+          "myAccess": {
+            "$ref": "#/components/schemas/BoardAccess"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Member": {
+        "type": "object",
+        "required": [
+          "user",
+          "isOwner",
+          "joinedAt"
+        ],
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/UserSummary"
+          },
+          "isOwner": {
+            "type": "boolean"
+          },
+          "joinedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Task": {
+        "type": "object",
+        "required": [
+          "id",
+          "boardId",
+          "title",
+          "description",
+          "status",
+          "priority",
+          "audience",
+          "scheduleType",
+          "dueDate",
+          "startAt",
+          "endAt",
+          "createdBy",
+          "assignees",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "boardId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "TODO",
+              "IN_PROGRESS",
+              "DONE"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "LOW",
+              "MEDIUM",
+              "HIGH"
+            ]
+          },
+          "audience": {
+            "type": "string",
+            "enum": [
+              "BOARD",
+              "SELECTED"
+            ],
+            "description": "BOARD = everyone on the board, SELECTED = creator + assignees only"
+          },
+          "scheduleType": {
+            "type": "string",
+            "enum": [
+              "NONE",
+              "DATE",
+              "TIMED"
+            ]
+          },
+          "dueDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Date-only task (YYYY-MM-DD)"
+          },
+          "startAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "endAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "createdBy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UserSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assignees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserSummary"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Reminder": {
+        "type": "object",
+        "required": [
+          "id",
+          "boardId",
+          "title",
+          "description",
+          "remindAt",
+          "audience",
+          "createdBy",
+          "recipients",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "boardId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "remindAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "audience": {
+            "type": "string",
+            "enum": [
+              "BOARD",
+              "SELECTED"
+            ]
+          },
+          "createdBy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UserSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recipients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserSummary"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CalendarEvent": {
+        "type": "object",
+        "required": [
+          "type",
+          "id",
+          "boardId",
+          "title",
+          "description",
+          "allDay",
+          "date",
+          "startAt",
+          "endAt",
+          "blocksTime",
+          "status",
+          "priority",
+          "audience"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "TASK",
+              "REMINDER"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Task id or reminder id"
+          },
+          "boardId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "allDay": {
+            "type": "boolean",
+            "description": "true for date-only tasks"
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Day of an all-day item"
+          },
+          "startAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Timed task start or reminder time"
+          },
+          "endAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Timed task end (null for reminders)"
+          },
+          "blocksTime": {
+            "type": "boolean",
+            "description": "true only for timed tasks that are not DONE"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "TODO",
+              "IN_PROGRESS",
+              "DONE",
+              null
+            ]
+          },
+          "priority": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "LOW",
+              "MEDIUM",
+              "HIGH",
+              null
+            ]
+          },
+          "audience": {
+            "type": "string",
+            "enum": [
+              "BOARD",
+              "SELECTED"
+            ]
+          }
+        }
+      },
+      "TimeSlot": {
+        "type": "object",
+        "required": [
+          "startAt",
+          "endAt"
+        ],
+        "properties": {
+          "startAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RegisterInput": {
+        "type": "object",
+        "required": [
+          "email",
+          "password",
+          "name"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 254
+          },
+          "password": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "At least 8 characters, with a letter and a digit"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        }
+      },
+      "LoginInput": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateBoardInput": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 5000
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "PRIVATE",
+              "SHARED"
+            ],
+            "default": "PRIVATE"
+          },
+          "isOpen": {
+            "type": "boolean",
+            "default": false,
+            "description": "Ignored (false) for PRIVATE boards"
+          }
+        }
+      },
+      "UpdateBoardInput": {
+        "type": "object",
+        "minProperties": 1,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 5000
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "PRIVATE",
+              "SHARED"
+            ]
+          },
+          "isOpen": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AddMemberInput": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "description": "Email of a registered user"
+          }
+        }
+      },
+      "CreateTaskInput": {
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "description": "Schedule options: none (no date fields), date-only (`dueDate`), or timed (`startAt` + `endAt`). A timed, not-DONE task is checked for overlaps with the time of its assignees (or of the creator if nobody is assigned) → 409 TIME_CONFLICT.",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 5000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "TODO",
+              "IN_PROGRESS",
+              "DONE"
+            ],
+            "default": "TODO"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "LOW",
+              "MEDIUM",
+              "HIGH"
+            ],
+            "default": "MEDIUM"
+          },
+          "audience": {
+            "type": "string",
+            "enum": [
+              "BOARD",
+              "SELECTED"
+            ],
+            "default": "BOARD"
+          },
+          "assigneeIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "default": [],
+            "description": "Board owner/members. Required (non-empty) when audience is SELECTED"
+          },
+          "dueDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "startAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "endAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "UpdateTaskInput": {
+        "type": "object",
+        "minProperties": 1,
+        "description": "Send only the fields to change. Send `null` to clear a field. Sending startAt/endAt clears dueDate and vice versa. `assigneeIds` replaces the whole list.",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 5000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "TODO",
+              "IN_PROGRESS",
+              "DONE"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "LOW",
+              "MEDIUM",
+              "HIGH"
+            ]
+          },
+          "audience": {
+            "type": "string",
+            "enum": [
+              "BOARD",
+              "SELECTED"
+            ]
+          },
+          "assigneeIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "dueDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "startAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "endAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "CreateReminderInput": {
+        "type": "object",
+        "required": [
+          "title",
+          "remindAt"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 5000
+          },
+          "remindAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "audience": {
+            "type": "string",
+            "enum": [
+              "BOARD",
+              "SELECTED"
+            ],
+            "default": "BOARD"
+          },
+          "recipientIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "default": [],
+            "description": "Required (non-empty) when audience is SELECTED"
+          }
+        }
+      },
+      "UpdateReminderInput": {
+        "type": "object",
+        "minProperties": 1,
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 5000
+          },
+          "remindAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "audience": {
+            "type": "string",
+            "enum": [
+              "BOARD",
+              "SELECTED"
+            ]
+          },
+          "recipientIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
+      "SchedulingInput": {
+        "type": "object",
+        "required": [
+          "durationMinutes",
+          "from",
+          "to"
+        ],
+        "properties": {
+          "durationMinutes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10080
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start of the search range"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End of the search range (max 92 days after from)"
+          },
+          "maxSuggestions": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "default": 3
+          },
+          "assignedUserId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Board owner/member to find time for. Defaults to the logged-in user"
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Health check",
+        "description": "Public. Checks the server and the database connection.",
+        "responses": {
+          "200": {
+            "description": "Server and database are up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "const": "ok"
+                        },
+                        "database": {
+                          "const": "up"
+                        },
+                        "uptimeSeconds": {
+                          "type": "integer"
+                        },
+                        "timestamp": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "status": "ok",
+                    "database": "up",
+                    "uptimeSeconds": 42,
+                    "timestamp": "2026-10-18T08:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database is not reachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "DATABASE_UNAVAILABLE",
+                    "message": "Database connection failed"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/register": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Register a new user",
+        "description": "Public (rate limited). Creates the user and logs them in — returns a token.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterInput"
+              },
+              "example": {
+                "email": "new.user@example.com",
+                "password": "Secret123",
+                "name": "New User"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Registered and logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/AuthResult"
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "user": {
+                      "id": "0b5c6f8e-1d2a-4c3b-9e8f-111111111111",
+                      "email": "new.user@example.com",
+                      "name": "New User",
+                      "createdAt": "2026-10-18T08:00:00.000Z"
+                    },
+                    "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                    "tokenType": "Bearer",
+                    "expiresAt": "2026-10-19T08:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Email already registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "EMAIL_TAKEN",
+                    "message": "An account with this email already exists"
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts (RATE_LIMITED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "RATE_LIMITED",
+                    "message": "Too many attempts. Please try again later"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Log in",
+        "description": "Public (rate limited). Returns a JWT access token. Each login creates a server-side session.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginInput"
+              },
+              "example": {
+                "email": "dana@example.com",
+                "password": "Demo1234!"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Logged in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/AuthResult"
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "user": {
+                      "id": "0b5c6f8e-1d2a-4c3b-9e8f-111111111111",
+                      "name": "Dana Levi",
+                      "email": "dana@example.com",
+                      "createdAt": "2026-10-18T08:00:00.000Z"
+                    },
+                    "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                    "tokenType": "Bearer",
+                    "expiresAt": "2026-10-19T08:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Wrong email or password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "INVALID_CREDENTIALS",
+                    "message": "Email or password is incorrect"
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts (RATE_LIMITED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "RATE_LIMITED",
+                    "message": "Too many attempts. Please try again later"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Log out",
+        "description": "Ends the current session on the server. The same token returns 401 afterwards.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Logged out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "loggedOut": {
+                          "const": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "loggedOut": true
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Current user",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The logged-in user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "user": {
+                          "$ref": "#/components/schemas/User"
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "user": {
+                      "id": "0b5c6f8e-1d2a-4c3b-9e8f-111111111111",
+                      "name": "Dana Levi",
+                      "email": "dana@example.com",
+                      "createdAt": "2026-10-18T08:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/boards": {
+      "get": {
+        "tags": [
+          "Boards"
+        ],
+        "summary": "List my boards",
+        "description": "Boards I own plus SHARED boards I am a member of. Newest first.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "description": "Search in name and description (case-insensitive)",
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          {
+            "name": "visibility",
+            "in": "query",
+            "required": false,
+            "description": "Filter by visibility",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "PRIVATE",
+                "SHARED"
+              ]
+            }
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "required": false,
+            "description": "owner = boards I created, member = boards shared with me",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "owner",
+                "member"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (starts at 1)",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "description": "Items per page",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Boards",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items",
+                        "pagination"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Board"
+                          }
+                        },
+                        "pagination": {
+                          "$ref": "#/components/schemas/Pagination"
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "items": [
+                      {
+                        "id": "7f3e2d1c-0b9a-4876-a5b4-333333333333",
+                        "name": "Final project",
+                        "description": "Shared board for the team",
+                        "visibility": "SHARED",
+                        "isOpen": true,
+                        "owner": {
+                          "id": "0b5c6f8e-1d2a-4c3b-9e8f-111111111111",
+                          "name": "Dana Levi",
+                          "email": "dana@example.com"
+                        },
+                        "memberCount": 2,
+                        "shareToken": "k3J9xQm2Lp8vT1sR4wY7zA0bC5dE6fG",
+                        "myAccess": {
+                          "isOwner": true,
+                          "isMember": false,
+                          "canView": true,
+                          "canEdit": true,
+                          "canManage": true
+                        },
+                        "createdAt": "2026-10-18T08:00:00.000Z",
+                        "updatedAt": "2026-10-18T08:00:00.000Z"
+                      }
+                    ],
+                    "pagination": {
+                      "page": 1,
+                      "pageSize": 20,
+                      "total": 1,
+                      "totalPages": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Boards"
+        ],
+        "summary": "Create a board",
+        "description": "Any logged-in user. The creator becomes the owner.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBoardInput"
+              },
+              "example": {
+                "name": "Final project",
+                "description": "Shared board for the team",
+                "visibility": "SHARED",
+                "isOpen": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Board"
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "7f3e2d1c-0b9a-4876-a5b4-333333333333",
+                    "name": "Final project",
+                    "description": "Shared board for the team",
+                    "visibility": "SHARED",
+                    "isOpen": true,
+                    "owner": {
+                      "id": "0b5c6f8e-1d2a-4c3b-9e8f-111111111111",
+                      "name": "Dana Levi",
+                      "email": "dana@example.com"
+                    },
+                    "memberCount": 0,
+                    "shareToken": "k3J9xQm2Lp8vT1sR4wY7zA0bC5dE6fG",
+                    "myAccess": {
+                      "isOwner": true,
+                      "isMember": false,
+                      "canView": true,
+                      "canEdit": true,
+                      "canManage": true
+                    },
+                    "createdAt": "2026-10-18T08:00:00.000Z",
+                    "updatedAt": "2026-10-18T08:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/boards/join/{shareToken}": {
+      "post": {
+        "tags": [
+          "Boards"
+        ],
+        "summary": "Join a SHARED board with its share link",
+        "description": "Any logged-in user who has the link becomes a member (can view; can edit when the board is open). Joining again is harmless. Private boards or old (regenerated) tokens return 404.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "shareToken",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Token from the share link"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The joined board",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Board"
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "7f3e2d1c-0b9a-4876-a5b4-333333333333",
+                    "name": "Final project",
+                    "description": "Shared board for the team",
+                    "visibility": "SHARED",
+                    "isOpen": true,
+                    "owner": {
+                      "id": "0b5c6f8e-1d2a-4c3b-9e8f-111111111111",
+                      "name": "Dana Levi",
+                      "email": "dana@example.com"
+                    },
+                    "memberCount": 3,
+                    "shareToken": null,
+                    "myAccess": {
+                      "isOwner": false,
+                      "isMember": true,
+                      "canView": true,
+                      "canEdit": true,
+                      "canManage": false
+                    },
+                    "createdAt": "2026-10-18T08:00:00.000Z",
+                    "updatedAt": "2026-10-18T08:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found — or you are not allowed to see it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "BOARD_NOT_FOUND",
+                    "message": "Board not found"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/boards/{boardId}": {
+      "parameters": [
+        {
+          "name": "boardId",
+          "in": "path",
+          "required": true,
+          "description": "Board id (UUID)",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Boards"
+        ],
+        "summary": "Get a board",
+        "description": "Owner or member. Includes `myAccess` with the current user's permissions.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Board",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Board"
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "7f3e2d1c-0b9a-4876-a5b4-333333333333",
+                    "name": "Final project",
+                    "description": "Shared board for the team",
+                    "visibility": "SHARED",
+                    "isOpen": true,
+                    "owner": {
+                      "id": "0b5c6f8e-1d2a-4c3b-9e8f-111111111111",
+                      "name": "Dana Levi",
+                      "email": "dana@example.com"
+                    },
+                    "memberCount": 2,
+                    "shareToken": "k3J9xQm2Lp8vT1sR4wY7zA0bC5dE6fG",
+                    "myAccess": {
+                      "isOwner": true,
+                      "isMember": false,
+                      "canView": true,
+                      "canEdit": true,
+                      "canManage": true
+                    },
+                    "createdAt": "2026-10-18T08:00:00.000Z",
+                    "updatedAt": "2026-10-18T08:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found — or you are not allowed to see it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "BOARD_NOT_FOUND",
+                    "message": "Board not found"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Boards"
+        ],
+        "summary": "Update board settings",
+        "description": "Owner only. Changing SHARED → PRIVATE requires removing all members first (409 BOARD_HAS_MEMBERS).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateBoardInput"
+              },
+              "example": {
+                "name": "Final project — team",
+                "isOpen": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated board",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Board"
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "7f3e2d1c-0b9a-4876-a5b4-333333333333",
+                    "name": "Final project — team",
+                    "description": "Shared board for the team",
+                    "visibility": "SHARED",
+                    "isOpen": false,
+                    "owner": {
+                      "id": "0b5c6f8e-1d2a-4c3b-9e8f-111111111111",
+                      "name": "Dana Levi",
+                      "email": "dana@example.com"
+                    },
+                    "memberCount": 2,
+                    "shareToken": "k3J9xQm2Lp8vT1sR4wY7zA0bC5dE6fG",
+                    "myAccess": {
+                      "isOwner": true,
+                      "isMember": false,
+                      "canView": true,
+                      "canEdit": true,
+                      "canManage": true
+                    },
+                    "createdAt": "2026-10-18T08:00:00.000Z",
+                    "updatedAt": "2026-10-18T08:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Logged in, but not allowed to do this (FORBIDDEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "You do not have permission to perform this action"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found — or you are not allowed to see it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "BOARD_NOT_FOUND",
+                    "message": "Board not found"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Board still has members",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "BOARD_HAS_MEMBERS",
+                    "message": "Remove all members before making the board private"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Boards"
+        ],
+        "summary": "Delete a board",
+        "description": "Owner only. Deletes its tasks, reminders and memberships too.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted (no response body)"
+          },
+          "400": {
+            "description": "Validation error or invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Logged in, but not allowed to do this (FORBIDDEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "You do not have permission to perform this action"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found — or you are not allowed to see it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "BOARD_NOT_FOUND",
+                    "message": "Board not found"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/boards/{boardId}/share-link": {
+      "parameters": [
+        {
+          "name": "boardId",
+          "in": "path",
+          "required": true,
+          "description": "Board id (UUID)",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Boards"
+        ],
+        "summary": "Create a new share link",
+        "description": "Owner only, SHARED boards only. The old link stops working (existing members stay). The new token is in `shareToken`.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Board with the new shareToken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Board"
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "7f3e2d1c-0b9a-4876-a5b4-333333333333",
+                    "name": "Final project",
+                    "description": "Shared board for the team",
+                    "visibility": "SHARED",
+                    "isOpen": true,
+                    "owner": {
+                      "id": "0b5c6f8e-1d2a-4c3b-9e8f-111111111111",
+                      "name": "Dana Levi",
+                      "email": "dana@example.com"
+                    },
+                    "memberCount": 2,
+                    "shareToken": "N3wT0k3nAbCdEfGhIjKlMnOpQrStUv",
+                    "myAccess": {
+                      "isOwner": true,
+                      "isMember": false,
+                      "canView": true,
+                      "canEdit": true,
+                      "canManage": true
+                    },
+                    "createdAt": "2026-10-18T08:00:00.000Z",
+                    "updatedAt": "2026-10-18T08:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Board is private",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "BOARD_IS_PRIVATE",
+                    "message": "Only SHARED boards have a share link"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Logged in, but not allowed to do this (FORBIDDEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "You do not have permission to perform this action"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found — or you are not allowed to see it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "BOARD_NOT_FOUND",
+                    "message": "Board not found"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/boards/{boardId}/members": {
+      "parameters": [
+        {
+          "name": "boardId",
+          "in": "path",
+          "required": true,
+          "description": "Board id (UUID)",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Members"
+        ],
+        "summary": "List board members",
+        "description": "Owner or member. The owner is first (`isOwner: true`).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Members",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Member"
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": [
+                    {
+                      "user": {
+                        "id": "0b5c6f8e-1d2a-4c3b-9e8f-111111111111",
+                        "name": "Dana Levi",
+                        "email": "dana@example.com"
+                      },
+                      "isOwner": true,
+                      "joinedAt": "2026-10-18T08:00:00.000Z"
+                    },
+                    {
+                      "user": {
+                        "id": "0b5c6f8e-1d2a-4c3b-9e8f-222222222222",
+                        "name": "Noa Cohen",
+                        "email": "noa@example.com"
+                      },
+                      "isOwner": false,
+                      "joinedAt": "2026-10-18T08:00:00.000Z"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found — or you are not allowed to see it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "BOARD_NOT_FOUND",
+                    "message": "Board not found"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Members"
+        ],
+        "summary": "Add a member by email",
+        "description": "Owner only, SHARED boards only. The user must already be registered.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddMemberInput"
+              },
+              "example": {
+                "email": "noa@example.com"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Member"
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "user": {
+                      "id": "0b5c6f8e-1d2a-4c3b-9e8f-222222222222",
+                      "name": "Noa Cohen",
+                      "email": "noa@example.com"
+                    },
+                    "isOwner": false,
+                    "joinedAt": "2026-10-18T08:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error, or board is PRIVATE (BOARD_IS_PRIVATE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Logged in, but not allowed to do this (FORBIDDEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "You do not have permission to perform this action"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Board not found, or no user with this email (USER_NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "USER_NOT_FOUND",
+                    "message": "No user is registered with this email"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already a member (ALREADY_MEMBER) or is the owner (CANNOT_ADD_OWNER)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "ALREADY_MEMBER",
+                    "message": "This user is already a member of the board"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/boards/{boardId}/members/{userId}": {
+      "parameters": [
+        {
+          "name": "boardId",
+          "in": "path",
+          "required": true,
+          "description": "Board id (UUID)",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "userId",
+          "in": "path",
+          "required": true,
+          "description": "User id of the member to remove",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "delete": {
+        "tags": [
+          "Members"
+        ],
+        "summary": "Remove a member",
+        "description": "Owner only. The owner cannot be removed. Tasks/reminders created by the member stay on the board; the member is removed from task assignees and reminder recipients on this board.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted (no response body)"
+          },
+          "400": {
+            "description": "Validation error, or trying to remove the owner (CANNOT_REMOVE_OWNER)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "CANNOT_REMOVE_OWNER",
+                    "message": "The board owner cannot be removed"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Logged in, but not allowed to do this (FORBIDDEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "You do not have permission to perform this action"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Board not found or user is not a member (MEMBER_NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "BOARD_NOT_FOUND",
+                    "message": "Board not found"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/boards/{boardId}/tasks": {
+      "parameters": [
+        {
+          "name": "boardId",
+          "in": "path",
+          "required": true,
+          "description": "Board id (UUID)",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "List tasks on a board (search & filters)",
+        "description": "Owner or member. Only tasks you may see are returned (BOARD tasks + SELECTED tasks you created or are assigned to). `from`/`to` keep date-only tasks whose day is in the range and timed tasks that overlap it.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "One or more of TODO, IN_PROGRESS, DONE (comma-separated)",
+            "schema": {
+              "type": "string",
+              "example": "TODO,IN_PROGRESS"
+            }
+          },
+          {
+            "name": "priority",
+            "in": "query",
+            "required": false,
+            "description": "One or more of LOW, MEDIUM, HIGH (comma-separated)",
+            "schema": {
+              "type": "string",
+              "example": "HIGH"
+            }
+          },
+          {
+            "name": "schedule",
+            "in": "query",
+            "required": false,
+            "description": "NONE = no date, DATE = date-only, TIMED = has start and end",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "NONE",
+                "DATE",
+                "TIMED"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "Range start (ISO 8601 with timezone)",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Range end (ISO 8601 with timezone)",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "description": "Search in title and description",
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          {
+            "name": "assignedToMe",
+            "in": "query",
+            "required": false,
+            "description": "Only tasks assigned to me",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "description": "Sort field",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "createdAt",
+                "updatedAt",
+                "title",
+                "startAt",
+                "dueDate"
+              ],
+              "default": "createdAt"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "description": "Sort direction",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "desc"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (starts at 1)",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "description": "Items per page",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tasks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items",
+                        "pagination"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Task"
+                          }
+                        },
+                        "pagination": {
+                          "$ref": "#/components/schemas/Pagination"
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "items": [
+                      {
+                        "id": "c1d2e3f4-a5b6-4c7d-8e9f-444444444444",
+                        "boardId": "7f3e2d1c-0b9a-4876-a5b4-333333333333",
+                        "title": "Prepare presentation",
+                        "description": "Slides for the final review",
+                        "status": "TODO",
+                        "priority": "HIGH",
+                        "audience": "BOARD",
+                        "scheduleType": "TIMED",
+                        "dueDate": null,
+                        "startAt": "2026-11-02T09:00:00.000Z",
+                        "endAt": "2026-11-02T10:30:00.000Z",
+                        "createdBy": {
+                          "id": "0b5c6f8e-1d2a-4c3b-9e8f-111111111111",
+                          "name": "Dana Levi",
+                          "email": "dana@example.com"
+                        },
+                        "assignees": [
+                          {
+                            "id": "0b5c6f8e-1d2a-4c3b-9e8f-222222222222",
+                            "name": "Noa Cohen",
+                            "email": "noa@example.com"
+                          }
+                        ],
+                        "createdAt": "2026-10-18T08:00:00.000Z",
+                        "updatedAt": "2026-10-18T08:00:00.000Z"
+                      }
+                    ],
+                    "pagination": {
+                      "page": 1,
+                      "pageSize": 20,
+                      "total": 1,
+                      "totalPages": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found — or you are not allowed to see it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "BOARD_NOT_FOUND",
+                    "message": "Board not found"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Create a task",
+        "description": "Requires edit permission (owner; or member of an open SHARED board). For a timed task the server re-checks — atomically — that the time is still free for the assignees (or the creator when nobody is assigned), across all their boards.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTaskInput"
+              },
+              "examples": {
+                "timed": {
+                  "summary": "Timed task (e.g. after choosing a scheduling suggestion)",
+                  "value": {
+                    "title": "Prepare presentation",
+                    "priority": "HIGH",
+                    "startAt": "2026-11-02T09:00:00Z",
+                    "endAt": "2026-11-02T10:30:00Z",
+                    "assigneeIds": [
+                      "0b5c6f8e-1d2a-4c3b-9e8f-222222222222"
+                    ]
+                  }
+                },
+                "dateOnly": {
+                  "summary": "Date-only task",
+                  "value": {
+                    "title": "Submit form",
+                    "dueDate": "2026-11-05"
+                  }
+                },
+                "unscheduled": {
+                  "summary": "No date",
+                  "value": {
+                    "title": "Buy markers",
+                    "priority": "LOW"
+                  }
+                },
+                "private": {
+                  "summary": "Private (SELECTED) task",
+                  "value": {
+                    "title": "Personal note",
+                    "audience": "SELECTED",
+                    "assigneeIds": [
+                      "0b5c6f8e-1d2a-4c3b-9e8f-111111111111"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Task"
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "c1d2e3f4-a5b6-4c7d-8e9f-444444444444",
+                    "boardId": "7f3e2d1c-0b9a-4876-a5b4-333333333333",
+                    "title": "Prepare presentation",
+                    "description": "Slides for the final review",
+                    "status": "TODO",
+                    "priority": "HIGH",
+                    "audience": "BOARD",
+                    "scheduleType": "TIMED",
+                    "dueDate": null,
+                    "startAt": "2026-11-02T09:00:00.000Z",
+                    "endAt": "2026-11-02T10:30:00.000Z",
+                    "createdBy": {
+                      "id": "0b5c6f8e-1d2a-4c3b-9e8f-111111111111",
+                      "name": "Dana Levi",
+                      "email": "dana@example.com"
+                    },
+                    "assignees": [
+                      {
+                        "id": "0b5c6f8e-1d2a-4c3b-9e8f-222222222222",
+                        "name": "Noa Cohen",
+                        "email": "noa@example.com"
+                      }
+                    ],
+                    "createdAt": "2026-10-18T08:00:00.000Z",
+                    "updatedAt": "2026-10-18T08:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error, or an assignee is not on the board (NOT_A_BOARD_MEMBER)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Logged in, but not allowed to do this (FORBIDDEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "You do not have permission to perform this action"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found — or you are not allowed to see it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "BOARD_NOT_FOUND",
+                    "message": "Board not found"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Time is already taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "TIME_CONFLICT",
+                    "message": "The selected time overlaps another scheduled task",
+                    "details": {
+                      "conflicts": [
+                        {
+                          "startAt": "2026-11-02T09:30:00.000Z",
+                          "endAt": "2026-11-02T11:00:00.000Z"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tasks/{taskId}": {
+      "parameters": [
+        {
+          "name": "taskId",
+          "in": "path",
+          "required": true,
+          "description": "Task id",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Get a task",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Task"
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "c1d2e3f4-a5b6-4c7d-8e9f-444444444444",
+                    "boardId": "7f3e2d1c-0b9a-4876-a5b4-333333333333",
+                    "title": "Prepare presentation",
+                    "description": "Slides for the final review",
+                    "status": "TODO",
+                    "priority": "HIGH",
+                    "audience": "BOARD",
+                    "scheduleType": "TIMED",
+                    "dueDate": null,
+                    "startAt": "2026-11-02T09:00:00.000Z",
+                    "endAt": "2026-11-02T10:30:00.000Z",
+                    "createdBy": {
+                      "id": "0b5c6f8e-1d2a-4c3b-9e8f-111111111111",
+                      "name": "Dana Levi",
+                      "email": "dana@example.com"
+                    },
+                    "assignees": [
+                      {
+                        "id": "0b5c6f8e-1d2a-4c3b-9e8f-222222222222",
+                        "name": "Noa Cohen",
+                        "email": "noa@example.com"
+                      }
+                    ],
+                    "createdAt": "2026-10-18T08:00:00.000Z",
+                    "updatedAt": "2026-10-18T08:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Task not found or not visible to you",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "TASK_NOT_FOUND",
+                    "message": "Task not found"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Update a task",
+        "description": "Requires edit permission. Time changes are re-checked for conflicts (409 TIME_CONFLICT).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTaskInput"
+              },
+              "example": {
+                "status": "DONE"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Task"
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "c1d2e3f4-a5b6-4c7d-8e9f-444444444444",
+                    "boardId": "7f3e2d1c-0b9a-4876-a5b4-333333333333",
+                    "title": "Prepare presentation",
+                    "description": "Slides for the final review",
+                    "status": "DONE",
+                    "priority": "HIGH",
+                    "audience": "BOARD",
+                    "scheduleType": "TIMED",
+                    "dueDate": null,
+                    "startAt": "2026-11-02T09:00:00.000Z",
+                    "endAt": "2026-11-02T10:30:00.000Z",
+                    "createdBy": {
+                      "id": "0b5c6f8e-1d2a-4c3b-9e8f-111111111111",
+                      "name": "Dana Levi",
+                      "email": "dana@example.com"
+                    },
+                    "assignees": [
+                      {
+                        "id": "0b5c6f8e-1d2a-4c3b-9e8f-222222222222",
+                        "name": "Noa Cohen",
+                        "email": "noa@example.com"
+                      }
+                    ],
+                    "createdAt": "2026-10-18T08:00:00.000Z",
+                    "updatedAt": "2026-10-18T08:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Logged in, but not allowed to do this (FORBIDDEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "You do not have permission to perform this action"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Task not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "TASK_NOT_FOUND",
+                    "message": "Task not found"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Time is already taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "TIME_CONFLICT",
+                    "message": "The selected time overlaps another scheduled task"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Delete a task",
+        "description": "Requires edit permission.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted (no response body)"
+          },
+          "400": {
+            "description": "Validation error or invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Logged in, but not allowed to do this (FORBIDDEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "You do not have permission to perform this action"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Task not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "TASK_NOT_FOUND",
+                    "message": "Task not found"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/boards/{boardId}/reminders": {
+      "parameters": [
+        {
+          "name": "boardId",
+          "in": "path",
+          "required": true,
+          "description": "Board id (UUID)",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Reminders"
+        ],
+        "summary": "List reminders on a board",
+        "description": "Owner or member. Sorted by remindAt (earliest first).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "remindAt >= from",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "remindAt < to",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "description": "Search in title and description",
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (starts at 1)",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "description": "Items per page",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reminders",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items",
+                        "pagination"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Reminder"
+                          }
+                        },
+                        "pagination": {
+                          "$ref": "#/components/schemas/Pagination"
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "items": [
+                      {
+                        "id": "d4c3b2a1-f6e5-4d7c-9b8a-555555555555",
+                        "boardId": "7f3e2d1c-0b9a-4876-a5b4-333333333333",
+                        "title": "Submit the project form",
+                        "description": null,
+                        "remindAt": "2026-11-05T07:00:00.000Z",
+                        "audience": "SELECTED",
+                        "createdBy": {
+                          "id": "0b5c6f8e-1d2a-4c3b-9e8f-111111111111",
+                          "name": "Dana Levi",
+                          "email": "dana@example.com"
+                        },
+                        "recipients": [
+                          {
+                            "id": "0b5c6f8e-1d2a-4c3b-9e8f-222222222222",
+                            "name": "Noa Cohen",
+                            "email": "noa@example.com"
+                          }
+                        ],
+                        "createdAt": "2026-10-18T08:00:00.000Z",
+                        "updatedAt": "2026-10-18T08:00:00.000Z"
+                      }
+                    ],
+                    "pagination": {
+                      "page": 1,
+                      "pageSize": 20,
+                      "total": 1,
+                      "totalPages": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found — or you are not allowed to see it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "BOARD_NOT_FOUND",
+                    "message": "Board not found"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Reminders"
+        ],
+        "summary": "Create a reminder",
+        "description": "Requires edit permission. Reminders never block time.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReminderInput"
+              },
+              "example": {
+                "title": "Submit the project form",
+                "remindAt": "2026-11-05T07:00:00Z",
+                "audience": "SELECTED",
+                "recipientIds": [
+                  "0b5c6f8e-1d2a-4c3b-9e8f-222222222222"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Reminder"
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "d4c3b2a1-f6e5-4d7c-9b8a-555555555555",
+                    "boardId": "7f3e2d1c-0b9a-4876-a5b4-333333333333",
+                    "title": "Submit the project form",
+                    "description": null,
+                    "remindAt": "2026-11-05T07:00:00.000Z",
+                    "audience": "SELECTED",
+                    "createdBy": {
+                      "id": "0b5c6f8e-1d2a-4c3b-9e8f-111111111111",
+                      "name": "Dana Levi",
+                      "email": "dana@example.com"
+                    },
+                    "recipients": [
+                      {
+                        "id": "0b5c6f8e-1d2a-4c3b-9e8f-222222222222",
+                        "name": "Noa Cohen",
+                        "email": "noa@example.com"
+                      }
+                    ],
+                    "createdAt": "2026-10-18T08:00:00.000Z",
+                    "updatedAt": "2026-10-18T08:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error, or a recipient is not on the board (NOT_A_BOARD_MEMBER)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Logged in, but not allowed to do this (FORBIDDEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "You do not have permission to perform this action"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found — or you are not allowed to see it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "BOARD_NOT_FOUND",
+                    "message": "Board not found"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/reminders/{reminderId}": {
+      "parameters": [
+        {
+          "name": "reminderId",
+          "in": "path",
+          "required": true,
+          "description": "Reminder id",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Reminders"
+        ],
+        "summary": "Get a reminder",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reminder",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Reminder"
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "d4c3b2a1-f6e5-4d7c-9b8a-555555555555",
+                    "boardId": "7f3e2d1c-0b9a-4876-a5b4-333333333333",
+                    "title": "Submit the project form",
+                    "description": null,
+                    "remindAt": "2026-11-05T07:00:00.000Z",
+                    "audience": "SELECTED",
+                    "createdBy": {
+                      "id": "0b5c6f8e-1d2a-4c3b-9e8f-111111111111",
+                      "name": "Dana Levi",
+                      "email": "dana@example.com"
+                    },
+                    "recipients": [
+                      {
+                        "id": "0b5c6f8e-1d2a-4c3b-9e8f-222222222222",
+                        "name": "Noa Cohen",
+                        "email": "noa@example.com"
+                      }
+                    ],
+                    "createdAt": "2026-10-18T08:00:00.000Z",
+                    "updatedAt": "2026-10-18T08:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Reminder not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "REMINDER_NOT_FOUND",
+                    "message": "Reminder not found"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Reminders"
+        ],
+        "summary": "Update a reminder",
+        "description": "Requires edit permission. `recipientIds` replaces the whole list.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateReminderInput"
+              },
+              "example": {
+                "remindAt": "2026-11-05T08:00:00Z"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated reminder",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Reminder"
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "d4c3b2a1-f6e5-4d7c-9b8a-555555555555",
+                    "boardId": "7f3e2d1c-0b9a-4876-a5b4-333333333333",
+                    "title": "Submit the project form",
+                    "description": null,
+                    "remindAt": "2026-11-05T08:00:00.000Z",
+                    "audience": "SELECTED",
+                    "createdBy": {
+                      "id": "0b5c6f8e-1d2a-4c3b-9e8f-111111111111",
+                      "name": "Dana Levi",
+                      "email": "dana@example.com"
+                    },
+                    "recipients": [
+                      {
+                        "id": "0b5c6f8e-1d2a-4c3b-9e8f-222222222222",
+                        "name": "Noa Cohen",
+                        "email": "noa@example.com"
+                      }
+                    ],
+                    "createdAt": "2026-10-18T08:00:00.000Z",
+                    "updatedAt": "2026-10-18T08:00:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Logged in, but not allowed to do this (FORBIDDEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "You do not have permission to perform this action"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Reminder not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "REMINDER_NOT_FOUND",
+                    "message": "Reminder not found"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Reminders"
+        ],
+        "summary": "Delete a reminder",
+        "description": "Requires edit permission.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted (no response body)"
+          },
+          "400": {
+            "description": "Validation error or invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Logged in, but not allowed to do this (FORBIDDEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "FORBIDDEN",
+                    "message": "You do not have permission to perform this action"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Reminder not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "REMINDER_NOT_FOUND",
+                    "message": "Reminder not found"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/boards/{boardId}/calendar": {
+      "parameters": [
+        {
+          "name": "boardId",
+          "in": "path",
+          "required": true,
+          "description": "Board id (UUID)",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Calendar"
+        ],
+        "summary": "Calendar events (tasks + reminders) in a range",
+        "description": "Owner or member. Timed tasks overlapping the range, date-only tasks (as all-day events) whose day is in the range, and reminders in the range. Unscheduled tasks are not included (use the task list). Max range 366 days.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "description": "Range start, e.g. 2026-11-01T00:00:00Z",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "description": "Range end, e.g. 2026-12-01T00:00:00Z",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Events sorted by time (all-day items first on their day)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "from",
+                        "to",
+                        "events"
+                      ],
+                      "properties": {
+                        "from": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "to": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "events": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/CalendarEvent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "from": "2026-11-01T00:00:00.000Z",
+                    "to": "2026-12-01T00:00:00.000Z",
+                    "events": [
+                      {
+                        "type": "TASK",
+                        "id": "c1d2e3f4-a5b6-4c7d-8e9f-444444444444",
+                        "boardId": "7f3e2d1c-0b9a-4876-a5b4-333333333333",
+                        "title": "Submit form",
+                        "description": null,
+                        "allDay": true,
+                        "date": "2026-11-02",
+                        "startAt": null,
+                        "endAt": null,
+                        "blocksTime": false,
+                        "status": "TODO",
+                        "priority": "MEDIUM",
+                        "audience": "BOARD"
+                      },
+                      {
+                        "type": "TASK",
+                        "id": "c1d2e3f4-a5b6-4c7d-8e9f-444444444444",
+                        "boardId": "7f3e2d1c-0b9a-4876-a5b4-333333333333",
+                        "title": "Prepare presentation",
+                        "description": null,
+                        "allDay": false,
+                        "date": null,
+                        "startAt": "2026-11-02T09:00:00.000Z",
+                        "endAt": "2026-11-02T10:30:00.000Z",
+                        "blocksTime": true,
+                        "status": "TODO",
+                        "priority": "HIGH",
+                        "audience": "BOARD"
+                      },
+                      {
+                        "type": "REMINDER",
+                        "id": "d4c3b2a1-f6e5-4d7c-9b8a-555555555555",
+                        "boardId": "7f3e2d1c-0b9a-4876-a5b4-333333333333",
+                        "title": "Call the teacher",
+                        "description": null,
+                        "allDay": false,
+                        "date": null,
+                        "startAt": "2026-11-02T12:00:00.000Z",
+                        "endAt": null,
+                        "blocksTime": false,
+                        "status": null,
+                        "priority": null,
+                        "audience": "BOARD"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found — or you are not allowed to see it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "BOARD_NOT_FOUND",
+                    "message": "Board not found"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/boards/{boardId}/scheduling/suggestions": {
+      "parameters": [
+        {
+          "name": "boardId",
+          "in": "path",
+          "required": true,
+          "description": "Board id (UUID)",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Calendar"
+        ],
+        "summary": "Suggest free time slots",
+        "description": "Owner or member. Finds free slots for `assignedUserId` (default: me), who must be the board owner or a member. Busy time = that user's timed, not-DONE tasks on ALL boards. Reminders, date-only tasks, unscheduled tasks and DONE tasks are ignored. Slots are cut back-to-back from each free gap inside [from, to), earliest first. Nothing is saved — create the task with POST /api/boards/{boardId}/tasks.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SchedulingInput"
+              },
+              "example": {
+                "durationMinutes": 90,
+                "from": "2026-11-02T08:00:00Z",
+                "to": "2026-11-02T16:00:00Z",
+                "maxSuggestions": 3
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Suggestions (empty array when nothing fits)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "suggestions"
+                      ],
+                      "properties": {
+                        "suggestions": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/TimeSlot"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "suggestions": [
+                      {
+                        "startAt": "2026-11-02T08:00:00.000Z",
+                        "endAt": "2026-11-02T09:30:00.000Z"
+                      },
+                      {
+                        "startAt": "2026-11-02T11:00:00.000Z",
+                        "endAt": "2026-11-02T12:30:00.000Z"
+                      },
+                      {
+                        "startAt": "2026-11-02T12:30:00.000Z",
+                        "endAt": "2026-11-02T14:00:00.000Z"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error, or the user is not on the board (NOT_A_BOARD_MEMBER)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed",
+                    "details": [
+                      {
+                        "path": "title",
+                        "message": "Title is required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token (UNAUTHORIZED / INVALID_TOKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Authentication required"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found — or you are not allowed to see it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": {
+                    "code": "BOARD_NOT_FOUND",
+                    "message": "Board not found"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

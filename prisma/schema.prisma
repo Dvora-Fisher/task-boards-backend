@@ -1,0 +1,178 @@
+// Prisma schema — task & reminder boards
+// All DateTime values are stored in UTC (timestamptz). Date-only task dates use the DATE type.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum BoardVisibility {
+  PRIVATE
+  SHARED
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+/// BOARD = visible to everyone who can see the board. SELECTED = visible only to the creator and the selected users.
+enum Audience {
+  BOARD
+  SELECTED
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  name         String
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  sessions           Session[]
+  ownedBoards        Board[]             @relation("BoardOwner")
+  memberships        BoardMember[]
+  createdTasks       Task[]              @relation("TaskCreator")
+  taskAssignments    TaskAssignment[]
+  createdReminders   Reminder[]          @relation("ReminderCreator")
+  reminderRecipients ReminderRecipient[]
+
+  @@map("users")
+}
+
+/// One row per successful login. Logout sets revokedAt, which invalidates the JWT immediately.
+model Session {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Board {
+  id          String          @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+  visibility  BoardVisibility @default(PRIVATE)
+  /// SHARED boards only: true = every member may add/edit/delete tasks; false = members can only view.
+  isOpen      Boolean         @default(false) @map("is_open")
+  /// Secret used in the share link. Regenerating it invalidates old links.
+  shareToken  String          @unique @map("share_token")
+  ownerId     String          @map("owner_id") @db.Uuid
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  owner     User          @relation("BoardOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members   BoardMember[]
+  tasks     Task[]
+  reminders Reminder[]
+
+  @@index([ownerId])
+  @@map("boards")
+}
+
+model BoardMember {
+  boardId  String   @map("board_id") @db.Uuid
+  userId   String   @map("user_id") @db.Uuid
+  joinedAt DateTime @default(now()) @map("joined_at") @db.Timestamptz(3)
+
+  board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([boardId, userId])
+  @@index([userId])
+  @@map("board_members")
+}
+
+model Task {
+  id          String       @id @default(uuid()) @db.Uuid
+  boardId     String       @map("board_id") @db.Uuid
+  title       String
+  description String?
+  status      TaskStatus   @default(TODO)
+  priority    TaskPriority @default(MEDIUM)
+  audience    Audience     @default(BOARD)
+  /// Date-only task (all-day). Mutually exclusive with startAt/endAt.
+  dueDate     DateTime?    @map("due_date") @db.Date
+  /// Timed task. startAt and endAt are always set together and endAt > startAt.
+  startAt     DateTime?    @map("start_at") @db.Timestamptz(3)
+  endAt       DateTime?    @map("end_at") @db.Timestamptz(3)
+  createdById String?      @map("created_by_id") @db.Uuid
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  board       Board            @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  createdBy   User?            @relation("TaskCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  assignments TaskAssignment[]
+
+  @@index([boardId, createdAt])
+  @@index([boardId, status])
+  @@index([boardId, dueDate])
+  @@index([boardId, startAt, endAt])
+  @@index([createdById])
+  @@map("tasks")
+}
+
+model TaskAssignment {
+  taskId     String   @map("task_id") @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  assignedAt DateTime @default(now()) @map("assigned_at") @db.Timestamptz(3)
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, userId])
+  @@index([userId])
+  @@map("task_assignments")
+}
+
+model Reminder {
+  id          String   @id @default(uuid()) @db.Uuid
+  boardId     String   @map("board_id") @db.Uuid
+  title       String
+  description String?
+  remindAt    DateTime @map("remind_at") @db.Timestamptz(3)
+  audience    Audience @default(BOARD)
+  createdById String?  @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  board      Board               @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  createdBy  User?               @relation("ReminderCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  recipients ReminderRecipient[]
+
+  @@index([boardId, remindAt])
+  @@index([createdById])
+  @@map("reminders")
+}
+
+model ReminderRecipient {
+  reminderId String @map("reminder_id") @db.Uuid
+  userId     String @map("user_id") @db.Uuid
+
+  reminder Reminder @relation(fields: [reminderId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([reminderId, userId])
+  @@index([userId])
+  @@map("reminder_recipients")
+}

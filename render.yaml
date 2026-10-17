@@ -1,0 +1,27 @@
+# Render Blueprint — creates the web service from this repository.
+# The PostgreSQL database is NOT created here: use any provider (Neon recommended, see START-HERE.md)
+# and paste its connection string into DATABASE_URL when Render asks for it.
+services:
+  - type: web
+    name: task-boards-api
+    runtime: node
+    plan: free
+    # --include=dev: TypeScript and Prisma are needed for the build even when NODE_ENV=production
+    buildCommand: npm ci --include=dev && npm run build
+    # applies pending Prisma migrations, then starts the server (free plan has no pre-deploy step)
+    startCommand: npm run start:prod
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        sync: false # Render asks for the value when you create the Blueprint
+      - key: JWT_SECRET
+        generateValue: true # Render generates a long random secret
+      - key: JWT_EXPIRES_IN_MINUTES
+        value: "1440"
+      - key: CORS_ORIGINS
+        sync: false # e.g. http://localhost:5173,https://your-react-site.example
