@@ -19,6 +19,8 @@ export function createApp() {
       origin(origin, callback) {
         // requests without Origin (curl, Swagger on the same host, server-to-server) are allowed
         if (!origin || env.corsOrigins.includes('*') || env.corsOrigins.includes(origin)) return callback(null, true);
+        // shows up in the Render logs — the usual cause is a missing or misspelled entry in CORS_ORIGINS
+        console.warn(`CORS: origin not allowed: ${origin} (allowed: ${env.corsOrigins.join(', ')})`);
         callback(null, false);
       },
       methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -26,6 +28,13 @@ export function createApp() {
       maxAge: 600,
     }),
   );
+  // A preflight from an origin that is not allowed is not answered by cors() and would otherwise fall
+  // through to the routes (and end up as a confusing 401 from authenticate). Answer it here without
+  // CORS headers, so the browser reports a plain CORS error.
+  app.use((req, res, next) => {
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+  });
   app.use(express.json({ limit: '100kb' }));
 
   // Swagger UI (its own CSP, because the UI uses inline styles)
