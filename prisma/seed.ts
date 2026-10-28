@@ -105,6 +105,9 @@ type ReminderSeed = {
 };
 
 async function main() {
+  // Shows WHICH database is being seeded, so a seed that went to the local Docker DB instead of Neon is obvious
+  const dbHost = (() => { try { return new URL(process.env.DATABASE_URL ?? '').host; } catch { return '(invalid DATABASE_URL)'; } })();
+  console.log(`Seeding database at ${dbHost} (NODE_ENV=${process.env.NODE_ENV ?? 'development'})`);
   const emails = Object.values(DEMO_USERS).map((u) => u.email);
   await prisma.user.deleteMany({ where: { email: { in: emails } } });
 
