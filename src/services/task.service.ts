@@ -19,16 +19,17 @@ function timeConflictError(conflicts: { start: Date; end: Date }[]): AppError {
   });
 }
 
-/** Locks the affected users' calendars and rejects the write if the time is already taken. */
+/** Locks the affected users' calendars and rejects the write if the time is already taken on this board. */
 async function assertNoTimeConflict(
   tx: TxClient,
+  boardId: string,
   task: { startAt: Date | null; endAt: Date | null; status: Task['status'] },
   userIds: string[],
   excludeTaskId?: string,
 ): Promise<void> {
   if (!task.startAt || !task.endAt || task.status === 'DONE' || userIds.length === 0) return;
   await lockUsersCalendars(tx, userIds);
-  const conflicts = await findConflicts(tx, userIds, { start: task.startAt, end: task.endAt }, excludeTaskId);
+  const conflicts = await findConflicts(tx, boardId, userIds, { start: task.startAt, end: task.endAt }, excludeTaskId);
   if (conflicts.length > 0) throw timeConflictError(conflicts);
 }
 
@@ -104,7 +105,7 @@ export async function createTask(boardId: string, userId: string, input: CreateT
 
     const startAt = input.startAt ?? null;
     const endAt = input.endAt ?? null;
-    await assertNoTimeConflict(tx, { startAt, endAt, status: input.status }, blockedUsersFor(input.assigneeIds, userId));
+    await assertNoTimeConflict(tx, boardId, { startAt, endAt, status: input.status }, blockedUsersFor(input.assigneeIds, userId));
 
     return tx.task.create({
       data: {
@@ -173,6 +174,7 @@ export async function updateTask(taskId: string, userId: string, input: UpdateTa
     if (scheduleChanged || assigneesChanged || reactivated) {
       await assertNoTimeConflict(
         tx,
+        current.boardId,
         { startAt: next.startAt, endAt: next.endAt, status },
         blockedUsersFor(assigneeIds, current.createdById),
         taskId,

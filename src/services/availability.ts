@@ -12,10 +12,11 @@ export interface Interval {
  *  - timed (startAt + endAt), not DONE
  *  - assigned to the user, OR created by the user with nobody assigned
  * Date-only tasks, unscheduled tasks, DONE tasks and reminders never block time.
- * Tasks from ALL boards are considered.
+ * Only tasks on the SAME board are considered — each board is a separate calendar.
  */
-export function blockingTaskWhere(userIds: string[], range: Interval, excludeTaskId?: string): Prisma.TaskWhereInput {
+export function blockingTaskWhere(boardId: string, userIds: string[], range: Interval, excludeTaskId?: string): Prisma.TaskWhereInput {
   return {
+    boardId,
     status: { not: 'DONE' },
     startAt: { lt: range.end },
     endAt: { gt: range.start },
@@ -33,9 +34,9 @@ export function blockedUsersFor(assigneeIds: string[], creatorId: string | null)
   return creatorId ? [creatorId] : [];
 }
 
-export async function findBusyIntervals(userId: string, range: Interval, db: TxClient | typeof prisma = prisma): Promise<Interval[]> {
+export async function findBusyIntervals(boardId: string, userId: string, range: Interval, db: TxClient | typeof prisma = prisma): Promise<Interval[]> {
   const tasks = await db.task.findMany({
-    where: blockingTaskWhere([userId], range),
+    where: blockingTaskWhere(boardId, [userId], range),
     select: { startAt: true, endAt: true },
     orderBy: { startAt: 'asc' },
   });
@@ -97,10 +98,10 @@ export async function lockUsersCalendars(tx: TxClient, userIds: string[]): Promi
   }
 }
 
-export async function findConflicts(tx: TxClient, userIds: string[], range: Interval, excludeTaskId?: string): Promise<Interval[]> {
+export async function findConflicts(tx: TxClient, boardId: string, userIds: string[], range: Interval, excludeTaskId?: string): Promise<Interval[]> {
   if (userIds.length === 0) return [];
   const tasks = await tx.task.findMany({
-    where: blockingTaskWhere(userIds, range, excludeTaskId),
+    where: blockingTaskWhere(boardId, userIds, range, excludeTaskId),
     select: { startAt: true, endAt: true },
     orderBy: { startAt: 'asc' },
     take: 20,

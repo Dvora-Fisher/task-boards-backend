@@ -5,7 +5,7 @@ import { findBusyIntervals, findFreeSlots } from './availability.js';
 
 /**
  * Suggests free time slots for a user who belongs to the board.
- * Busy time = the user's timed, not-DONE tasks on ALL boards. Nothing is saved.
+ * Busy time = the user's timed, not-DONE tasks on THIS board only. Nothing is saved.
  */
 export async function suggestSlots(boardId: string, userId: string, input: SchedulingSuggestionsInput) {
   const { board } = await loadBoardAccess(boardId, userId);
@@ -13,7 +13,7 @@ export async function suggestSlots(boardId: string, userId: string, input: Sched
   await assertBoardUsers(board, [targetUserId]);
 
   const range = { start: input.from, end: input.to };
-  const busy = await findBusyIntervals(targetUserId, range);
+  const busy = await findBusyIntervals(boardId, targetUserId, range);
   const slots = findFreeSlots(busy, range, input.durationMinutes * MINUTE_MS, input.maxSuggestions);
 
   return {

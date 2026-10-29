@@ -204,15 +204,16 @@ describe('time conflicts', () => {
     expect(res.body.error.details.conflicts).toEqual([{ startAt: '2030-03-04T09:00:00.000Z', endAt: '2030-03-04T10:30:00.000Z' }]);
   });
 
-  it('checks the assignees across ALL their boards, and other users are not blocked', async () => {
+  it('checks the assignees on the SAME board only, and other users are not blocked', async () => {
     const dana = await registerUser('Dana');
     const noa = await registerUser('Noa');
     const boardA = await createSharedBoard(dana, [noa], true);
     const boardB = await createSharedBoard(noa, [dana], true);
 
     expect((await createTask(dana, boardA.id, { ...slot(9, 0, 10, 0), assigneeIds: [noa.id] })).status).toBe(201);
-    expectError(await createTask(noa, boardB.id, slot(9, 30, 10, 30)), 409, 'TIME_CONFLICT'); // noa busy (board A)
-    expect((await createTask(dana, boardB.id, { ...slot(9, 30, 10, 30), assigneeIds: [dana.id] })).status).toBe(201); // dana is free
+    expectError(await createTask(noa, boardA.id, slot(9, 30, 10, 30)), 409, 'TIME_CONFLICT'); // noa busy on board A
+    expect((await createTask(noa, boardB.id, slot(9, 30, 10, 30))).status).toBe(201); // board B is a separate calendar
+    expect((await createTask(dana, boardA.id, { ...slot(9, 30, 10, 30), assigneeIds: [dana.id] })).status).toBe(201); // dana is free
   });
 
   it('date-only tasks, DONE tasks and reminders never cause conflicts', async () => {

@@ -64,15 +64,16 @@ describe('POST /api/boards/:boardId/scheduling/suggestions', () => {
     expect(res.body.data.suggestions).toEqual([{ startAt: t('08:00'), endAt: t('10:00') }]);
   });
 
-  it("uses the target user's tasks from ALL boards", async () => {
+  it("uses the target user's tasks on THIS board only", async () => {
     const dana = await registerUser('Dana');
     const noa = await registerUser('Noa');
     const board = await createSharedBoard(dana, [noa], true);
     const noasOwnBoard = await createBoard(noa);
-    await createTask(noa, noasOwnBoard.id, { startAt: t('08:00'), endAt: t('09:00') }); // private board of Noa
+    await createTask(noa, noasOwnBoard.id, { startAt: t('08:00'), endAt: t('09:00') }); // other board – ignored
+    await createTask(dana, board.id, { startAt: t('09:00'), endAt: t('10:00'), assigneeIds: [noa.id] }); // this board – busy
 
     const forNoa = await suggest(dana, board.id, { durationMinutes: 60, from: t('08:00'), to: t('10:00'), assignedUserId: noa.id });
-    expect(forNoa.body.data.suggestions).toEqual([{ startAt: t('09:00'), endAt: t('10:00') }]);
+    expect(forNoa.body.data.suggestions).toEqual([{ startAt: t('08:00'), endAt: t('09:00') }]);
 
     const forDana = await suggest(dana, board.id, { durationMinutes: 60, from: t('08:00'), to: t('10:00'), maxSuggestions: 1 });
     expect(forDana.body.data.suggestions).toEqual([{ startAt: t('08:00'), endAt: t('09:00') }]);

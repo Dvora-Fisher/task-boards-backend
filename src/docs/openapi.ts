@@ -742,7 +742,7 @@ export const openApiDocument = {
         tags: ['Tasks'],
         summary: 'Create a task',
         description:
-          'Requires edit permission (owner; or member of an open SHARED board). For a timed task the server re-checks — atomically — that the time is still free for the assignees (or the creator when nobody is assigned), across all their boards.',
+          'Requires edit permission (owner; or member of an open SHARED board). For a timed task the server re-checks — atomically — that the time is still free for the assignees (or the creator when nobody is assigned), on this board.',
         security: bearer,
         requestBody: {
           required: true,
@@ -905,7 +905,7 @@ export const openApiDocument = {
         tags: ['Calendar'],
         summary: 'Suggest free time slots',
         description:
-          'Owner or member. Finds free slots for `assignedUserId` (default: me), who must be the board owner or a member. Busy time = that user\'s timed, not-DONE tasks on ALL boards. Reminders, date-only tasks, unscheduled tasks and DONE tasks are ignored. Slots are cut back-to-back from each free gap inside [from, to), earliest first. Nothing is saved — create the task with POST /api/boards/{boardId}/tasks.',
+          'Owner or member. Finds free slots for `assignedUserId` (default: me), who must be the board owner or a member. Busy time = that user\'s timed, not-DONE tasks on this board. Reminders, date-only tasks, unscheduled tasks and DONE tasks are ignored. Slots are cut back-to-back from each free gap inside [from, to), earliest first. Nothing is saved — create the task with POST /api/boards/{boardId}/tasks.',
         security: bearer,
         requestBody: jsonBody(ref('SchedulingInput'), { durationMinutes: 90, from: '2026-11-02T08:00:00Z', to: '2026-11-02T16:00:00Z', maxSuggestions: 3 }),
         responses: {
